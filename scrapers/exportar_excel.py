@@ -46,33 +46,33 @@ DICCIONARIO = [
 FORMULAS_LIMPIEZA = [
     (
         "nombre_limpio",
-        "=ESPACIOS(LIMPIAR(NOMPROPIO(D{row})))",
-        "ESPACIOS+LIMPIAR+NOMPROPIO sobre 'nombre': elimina espacios, caracteres no imprimibles y capitaliza"
+        "=TRIM(CLEAN(PROPER(D{row})))",
+        "TRIM+CLEAN+PROPER sobre 'nombre': elimina espacios, caracteres no imprimibles y capitaliza"
     ),
     (
         "marca_normalizada",
-        "=NOMPROPIO(ESPACIOS(SUSTITUIR(SUSTITUIR(SUSTITUIR(SUSTITUIR(E{row},\"TRESEMME\",\"Tresemme\"),\"HEAD & SHOULDERS\",\"Head & Shoulders\"),\"ELVIVE\",\"Elvive\"),\"FRUCTIS\",\"Fructis\")))",
-        "NOMPROPIO+ESPACIOS+SUSTITUIR sobre 'marca': normaliza case y corrige nombres especificos"
+        "=PROPER(TRIM(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(E{row},\"TRESEMME\",\"Tresemme\"),\"HEAD & SHOULDERS\",\"Head & Shoulders\"),\"ELVIVE\",\"Elvive\"),\"FRUCTIS\",\"Fructis\")))",
+        "PROPER+TRIM+SUBSTITUTE sobre 'marca': normaliza case y corrige nombres especificos"
     ),
     (
         "es_duplicado",
-        "=CONTAR.SI($D$2:$D$10000,D{row})>1",
-        "CONTAR.SI sobre 'nombre': detecta si hay más de 1 fila con el mismo nombre (posible duplicado)"
+        "=COUNTIF($D$2:$D$10000,D{row})>1",
+        "COUNTIF sobre 'nombre': detecta si hay mas de 1 fila con el mismo nombre (posible duplicado)"
     ),
     (
         "disponible_texto",
-        "=SI(H{row}=VERDADERO,\"Disponible\",\"No disponible\")",
-        "SI sobre 'disponible': convierte booleano a texto legible"
+        "=IF(H{row}=TRUE,\"Disponible\",\"No disponible\")",
+        "IF sobre 'disponible': convierte booleano a texto legible"
     ),
     (
         "precio_ml_calculado",
-        "=SI(Y(ESNUMERO(I{row}),I{row}>0),REDONDEAR(F{row}/I{row},2),\"Sin volumen\")",
-        "SI+Y+ISNUMBER+REDONDEAR: calcula precio/ml solo cuando el volumen es un número válido"
+        "=IF(AND(ISNUMBER(I{row}),I{row}>0),ROUND(F{row}/I{row},2),\"Sin volumen\")",
+        "IF+AND+ISNUMBER+ROUND: calcula precio/ml solo cuando el volumen es un numero valido"
     ),
     (
         "rango_precio",
-        "=SI(F{row}<5000,\"Bajo\",SI(F{row}<15000,\"Medio\",\"Alto\"))",
-        "SI anidado sobre 'precio_ars': segmenta en rangos Bajo/Medio/Alto"
+        "=IF(F{row}<5000,\"Bajo\",IF(F{row}<15000,\"Medio\",\"Alto\"))",
+        "IF anidado sobre 'precio_ars': segmenta en rangos Bajo/Medio/Alto"
     ),
 ]
 
