@@ -1,9 +1,12 @@
 import pandas as pd
+from collections import OrderedDict
 from pathlib import Path
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.utils import get_column_letter
 
 BASE = Path(__file__).parent.parent
+
+CLEAN_PATH = BASE / "data" / "clean" / "dataset_limpio.csv"
 
 RAW_PATHS = {
     "Jumbo":     BASE / "data" / "raw" / "jumbo_raw.csv",
@@ -191,6 +194,249 @@ def escribir_guia_formulas(writer):
     ws.column_dimensions["C"].width = 75
 
 
+def calc_stats(series):
+    """Métricas de estadística descriptiva según clase 4 UADE."""
+    s = series.dropna()
+    if len(s) == 0:
+        return OrderedDict()
+    q1 = float(s.quantile(0.25))
+    q3 = float(s.quantile(0.75))
+    iri = round(q3 - q1, 2)
+    lim_inf = round(q1 - 1.5 * iri, 2)
+    lim_sup = round(q3 + 1.5 * iri, 2)
+    try:
+        moda = round(float(s.mode().iloc[0]), 2)
+    except Exception:
+        moda = None
+    return OrderedDict([
+        ("n",                       int(len(s))),
+        ("Minimo",                  round(float(s.min()), 2)),
+        ("Maximo",                  round(float(s.max()), 2)),
+        ("Rango",                   round(float(s.max() - s.min()), 2)),
+        ("Media",                   round(float(s.mean()), 2)),
+        ("Mediana",                 round(float(s.median()), 2)),
+        ("Moda",                    moda),
+        ("Varianza",                round(float(s.var()), 2)),
+        ("Desvio Estandar",         round(float(s.std()), 2)),
+        ("Asimetria",               round(float(s.skew()), 4)),
+        ("Curtosis",                round(float(s.kurt()), 4)),
+        ("Q1",                      round(q1, 2)),
+        ("Q2 (Mediana)",            round(float(s.median()), 2)),
+        ("Q3",                      round(q3, 2)),
+        ("RI (Q3 - Q1)",            iri),
+        ("Limite Inf. Outliers",    lim_inf),
+        ("Limite Sup. Outliers",    lim_sup),
+        ("N Outliers Inferiores",   int((s < lim_inf).sum())),
+        ("N Outliers Superiores",   int((s > lim_sup).sum())),
+    ])
+
+
+# Fórmulas Sheets equivalentes para referencia del alumno
+FORMULAS_REF = {
+    "n":                      "=COUNTA(rango)",
+    "Minimo":                 "=MIN(rango)",
+    "Maximo":                 "=MAX(rango)",
+    "Rango":                  "=MAX(rango)-MIN(rango)",
+    "Media":                  "=AVERAGE(rango)",
+    "Mediana":                "=MEDIAN(rango)",
+    "Moda":                   "=MODE.SNGL(rango)",
+    "Varianza":               "=VAR(rango)",
+    "Desvio Estandar":        "=STDEV(rango)",
+    "Asimetria":              "=SKEW(rango)",
+    "Curtosis":               "=KURT(rango)",
+    "Q1":                     "=QUARTILE(rango,1)",
+    "Q2 (Mediana)":           "=QUARTILE(rango,2)",
+    "Q3":                     "=QUARTILE(rango,3)",
+    "RI (Q3 - Q1)":           "=Q3-Q1",
+    "Limite Inf. Outliers":   "=Q1-1.5*RI",
+    "Limite Sup. Outliers":   "=Q3+1.5*RI",
+    "N Outliers Inferiores":  "=COUNTIF(rango,\"<\"&limite_inf)",
+    "N Outliers Superiores":  "=COUNTIF(rango,\">\"&limite_sup)",
+}
+
+
+def escribir_estadisticas(writer, df):
+    """Hoja de estadística descriptiva — clase 4 UADE."""
+    wb = writer.book
+    ws = wb.create_sheet("estadistica_descriptiva")
+
+    # ── Paleta de colores ───────────────────────────────────────────────
+    C_TITLE   = "1C2833"  # encabezado principal
+    C_GLOBAL  = "1A5276"  # secciones globales
+    C_H1      = "6C3483"  # H1: linea_tipo
+    C_H2      = "117A65"  # H2: tipo_cabello
+    C_H3      = "784212"  # H3: fuente
+    C_COL_HDR = "566573"  # cabeceras de columna
+    C_ALT     = "EAF2FF"  # filas pares
+
+    def hdr(cell, color, bold=True, size=10, align="left"):
+        cell.fill = PatternFill("solid", fgColor=color)
+        cell.font = Font(color="FFFFFF", bold=bold, size=size)
+        cell.alignment = Alignment(horizontal=align, vertical="center", wrap_text=True)
+
+    def val_cell(cell, alt=False, right=False, italic=False, gray=False):
+        if alt:
+            cell.fill = PatternFill("solid", fgColor=C_ALT)
+        fc = "777777" if gray else "000000"
+        cell.font = Font(size=9, italic=italic, color=fc)
+        cell.alignment = Alignment(horizontal="right" if right else "left", vertical="center")
+
+    current_row = [1]  # mutable para uso en closures
+
+    def r():
+        return current_row[0]
+
+    def next_row(n=1):
+        current_row[0] += n
+
+    # ── Título principal ────────────────────────────────────────────────
+    ws.merge_cells(start_row=r(), start_column=1, end_row=r(), end_column=7)
+    c = ws.cell(row=r(), column=1,
+                value="Estadistica Descriptiva — Dataset Shampoo & Acondicionador (Clase 4 UADE)")
+    hdr(c, C_TITLE, size=12)
+    ws.row_dimensions[r()].height = 26
+    next_row(2)
+
+    def write_global_section(titulo, col_color, variable, series, col_formula_note):
+        """Tabla de 3 columnas: Metrica | Valor | Formula Sheets."""
+        # Encabezado sección
+        ws.merge_cells(start_row=r(), start_column=1, end_row=r(), end_column=3)
+        hdr(ws.cell(row=r(), column=1, value=titulo), col_color, size=10)
+        ws.row_dimensions[r()].height = 20
+        next_row()
+
+        # Sub-encabezados columna
+        for col, txt in enumerate(["Metrica", "Valor", "Formula Sheets (referencia)"], 1):
+            hdr(ws.cell(row=r(), column=col, value=txt), C_COL_HDR, size=9, align="center")
+        ws.row_dimensions[r()].height = 17
+        next_row()
+
+        stats = calc_stats(series)
+        for i, (metric, value) in enumerate(stats.items()):
+            alt = (i % 2 == 0)
+            val_cell(ws.cell(row=r(), column=1, value=metric), alt=alt)
+            val_cell(ws.cell(row=r(), column=2, value=value),  alt=alt, right=True)
+            val_cell(ws.cell(row=r(), column=3, value=FORMULAS_REF.get(metric, "")),
+                     alt=alt, italic=True, gray=True)
+            ws.row_dimensions[r()].height = 15
+            next_row()
+
+        # nota interpretación asimetría
+        note = ws.cell(row=r(), column=1,
+                       value=f"Nota: Asimetria={stats.get('Asimetria','?')}  "
+                             f"({'cola derecha (precios altos)' if stats.get('Asimetria',0)>0 else 'cola izquierda'}). "
+                             f"Outliers totales: {stats.get('N Outliers Inferiores',0)+stats.get('N Outliers Superiores',0)}")
+        ws.merge_cells(start_row=r(), start_column=1, end_row=r(), end_column=3)
+        note.font = Font(size=8, italic=True, color="444444")
+        note.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        ws.row_dimensions[r()].height = 22
+        next_row(2)
+
+    def write_grouped_section(titulo, col_color, variable, grupos_dict):
+        """Tabla multi-columna: Metrica | Grupo1 | Grupo2 | ... con métricas clave."""
+        grupos = list(grupos_dict.keys())
+        n_grupos = len(grupos)
+        total_cols = 1 + n_grupos  # Metrica + grupos
+
+        ws.merge_cells(start_row=r(), start_column=1, end_row=r(), end_column=total_cols)
+        hdr(ws.cell(row=r(), column=1, value=titulo), col_color, size=10)
+        ws.row_dimensions[r()].height = 20
+        next_row()
+
+        # Cabeceras
+        hdr(ws.cell(row=r(), column=1, value="Metrica"), C_COL_HDR, size=9, align="center")
+        for j, g in enumerate(grupos, 2):
+            hdr(ws.cell(row=r(), column=j, value=g), C_COL_HDR, size=9, align="center")
+        ws.row_dimensions[r()].height = 17
+        next_row()
+
+        # Calcular stats por grupo
+        all_stats = {g: calc_stats(grupos_dict[g]) for g in grupos}
+
+        # Métricas seleccionadas para secciones agrupadas (subset)
+        metricas_clave = [
+            "n", "Media", "Mediana", "Desvio Estandar",
+            "Minimo", "Maximo", "Rango",
+            "Q1", "Q3", "RI (Q3 - Q1)",
+            "Limite Inf. Outliers", "Limite Sup. Outliers",
+            "N Outliers Inferiores", "N Outliers Superiores",
+        ]
+
+        for i, metric in enumerate(metricas_clave):
+            alt = (i % 2 == 0)
+            val_cell(ws.cell(row=r(), column=1, value=metric), alt=alt)
+            for j, g in enumerate(grupos, 2):
+                v = all_stats[g].get(metric, "")
+                val_cell(ws.cell(row=r(), column=j, value=v), alt=alt, right=True)
+            ws.row_dimensions[r()].height = 15
+            next_row()
+
+        next_row()  # espacio entre secciones
+
+    # ── Sección 1: precio_ars global ─────────────────────────────────
+    write_global_section(
+        titulo=f"1. precio_ars — Analisis Global  (n={len(df):,} registros)",
+        col_color=C_GLOBAL,
+        variable="precio_ars",
+        series=df["precio_ars"],
+        col_formula_note="F",
+    )
+
+    # ── Sección 2: precio_por_ml global ──────────────────────────────
+    df_ml = df[df["precio_por_ml"].notna()]
+    write_global_section(
+        titulo=f"2. precio_por_ml — Analisis Global  (n={len(df_ml):,} con volumen informado)",
+        col_color=C_GLOBAL,
+        variable="precio_por_ml",
+        series=df_ml["precio_por_ml"],
+        col_formula_note="J",
+    )
+
+    # ── Sección 3: H1 — precio_por_ml por linea_tipo ─────────────────
+    write_grouped_section(
+        titulo="3. H1: precio_por_ml por linea_tipo  (Profesional vs Estandar)",
+        col_color=C_H1,
+        variable="precio_por_ml",
+        grupos_dict={
+            linea: df_ml[df_ml["linea_tipo"] == linea]["precio_por_ml"]
+            for linea in sorted(df_ml["linea_tipo"].dropna().unique())
+        },
+    )
+
+    # ── Sección 4: H2 — precio_por_ml por tipo_cabello ───────────────
+    write_grouped_section(
+        titulo="4. H2: precio_por_ml por tipo_cabello",
+        col_color=C_H2,
+        variable="precio_por_ml",
+        grupos_dict={
+            tc: df_ml[df_ml["tipo_cabello"] == tc]["precio_por_ml"]
+            for tc in sorted(df_ml["tipo_cabello"].dropna().unique())
+        },
+    )
+
+    # ── Sección 5: H3 — precio_ars por fuente ────────────────────────
+    write_grouped_section(
+        titulo="5. H3: precio_ars por fuente  (Jumbo vs Farmacity vs Disco)",
+        col_color=C_H3,
+        variable="precio_ars",
+        grupos_dict={
+            f: df[df["fuente"] == f]["precio_ars"]
+            for f in ["Jumbo", "Farmacity", "Disco"]
+        },
+    )
+
+    # ── Anchos de columna ─────────────────────────────────────────────
+    ws.column_dimensions["A"].width = 26
+    ws.column_dimensions["B"].width = 16
+    ws.column_dimensions["C"].width = 34
+    ws.column_dimensions["D"].width = 16
+    ws.column_dimensions["E"].width = 16
+    ws.column_dimensions["F"].width = 16
+    ws.column_dimensions["G"].width = 16
+    ws.column_dimensions["H"].width = 16
+    ws.freeze_panes = "A3"
+
+
 def main():
     with pd.ExcelWriter(OUTPUT, engine="openpyxl") as writer:
         for fuente, path in RAW_PATHS.items():
@@ -210,6 +456,10 @@ def main():
 
         escribir_diccionario(writer)
         escribir_guia_formulas(writer)
+
+        df_clean = pd.read_csv(CLEAN_PATH)
+        escribir_estadisticas(writer, df_clean)
+        print(f"  estadistica_descriptiva: {len(df_clean)} registros analizados")
         print(f"  diccionario_datos + guia_formulas_limpieza")
 
     print(f"\nArchivo generado: {OUTPUT}")
