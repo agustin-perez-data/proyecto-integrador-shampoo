@@ -869,6 +869,17 @@ def main():
         escribir_guia_formulas(writer)
 
         df_clean = pd.read_csv(CLEAN_PATH)
+
+        # Hoja consolidada — fuente única para las tablas dinámicas
+        df_clean.to_excel(writer, sheet_name="datos_consolidados", index=False)
+        ws_cons = writer.sheets["datos_consolidados"]
+        for cell in ws_cons[1]:
+            set_header_style(cell, "1C2833")
+        ws_cons.row_dimensions[1].height = 22
+        ws_cons.freeze_panes = "A2"
+        autofit(ws_cons)
+        print(f"  datos_consolidados: {len(df_clean)} registros (fuente para tablas dinamicas)")
+
         escribir_estadisticas(writer, df_clean)
         escribir_visualizaciones(writer, df_clean)
         escribir_regresion(writer, df_clean)
