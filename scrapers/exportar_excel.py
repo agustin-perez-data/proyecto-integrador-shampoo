@@ -51,8 +51,8 @@ FORMULAS_LIMPIEZA = [
     ),
     (
         "marca_normalizada",
-        "=NOMPROPIO(ESPACIOS(SUSTITUIR(SUSTITUIR(SUSTITUIR(SUSTITUIR(E{row},\"TRESEMME\",\"Tresemmé\"),\"HEAD & SHOULDERS\",\"Head & Shoulders\"),\"ELVIVE\",\"Elvive\"),\"FRUCTIS\",\"Fructis\")))",
-        "NOMPROPIO+ESPACIOS+SUSTITUIR sobre 'marca': normaliza case y corrige nombres específicos"
+        "=NOMPROPIO(ESPACIOS(SUSTITUIR(SUSTITUIR(SUSTITUIR(SUSTITUIR(E{row},\"TRESEMME\",\"Tresemme\"),\"HEAD & SHOULDERS\",\"Head & Shoulders\"),\"ELVIVE\",\"Elvive\"),\"FRUCTIS\",\"Fructis\")))",
+        "NOMPROPIO+ESPACIOS+SUSTITUIR sobre 'marca': normaliza case y corrige nombres especificos"
     ),
     (
         "es_duplicado",
@@ -66,7 +66,7 @@ FORMULAS_LIMPIEZA = [
     ),
     (
         "precio_ml_calculado",
-        "=SI(Y(ISNUMBER(I{row}),I{row}>0),REDONDEAR(F{row}/I{row},2),\"Sin volumen\")",
+        "=SI(Y(ESNUMERO(I{row}),I{row}>0),REDONDEAR(F{row}/I{row},2),\"Sin volumen\")",
         "SI+Y+ISNUMBER+REDONDEAR: calcula precio/ml solo cuando el volumen es un número válido"
     ),
     (
