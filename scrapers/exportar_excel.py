@@ -163,19 +163,6 @@ def escribir_limpio(writer, df_raw, nombre_hoja, colores):
     autofit(ws)
 
 
-def escribir_diccionario(writer, colores_base="1F3864"):
-    rows = []
-    for campo, tipo, clave, desc in DICCIONARIO:
-        rows.append({"Campo": campo, "Tipo de dato": tipo, "Clave": clave, "Descripción": desc})
-    df = pd.DataFrame(rows)
-    df.to_excel(writer, sheet_name="diccionario_datos", index=False)
-    ws = writer.sheets["diccionario_datos"]
-    for cell in ws[1]:
-        set_header_style(cell, colores_base)
-    ws.row_dimensions[1].height = 26
-    autofit(ws, max_w=80)
-    ws.column_dimensions["D"].width = 72
-
 
 def escribir_guia_formulas(writer):
     """Hoja extra: guía de qué fórmula hace qué (útil para el informe)."""
@@ -297,16 +284,14 @@ def escribir_estadisticas(writer, df):
     ws.row_dimensions[r()].height = 26
     next_row(2)
 
-    def write_global_section(titulo, col_color, variable, series, col_formula_note):
-        """Tabla de 3 columnas: Metrica | Valor | Formula Sheets."""
-        # Encabezado sección
-        ws.merge_cells(start_row=r(), start_column=1, end_row=r(), end_column=3)
+    def write_global_section(titulo, col_color, variable, series):
+        """Tabla de 2 columnas: Metrica | Valor."""
+        ws.merge_cells(start_row=r(), start_column=1, end_row=r(), end_column=2)
         hdr(ws.cell(row=r(), column=1, value=titulo), col_color, size=10)
         ws.row_dimensions[r()].height = 20
         next_row()
 
-        # Sub-encabezados columna
-        for col, txt in enumerate(["Metrica", "Valor", "Formula Sheets (referencia)"], 1):
+        for col, txt in enumerate(["Metrica", "Valor"], 1):
             hdr(ws.cell(row=r(), column=col, value=txt), C_COL_HDR, size=9, align="center")
         ws.row_dimensions[r()].height = 17
         next_row()
@@ -316,17 +301,14 @@ def escribir_estadisticas(writer, df):
             alt = (i % 2 == 0)
             val_cell(ws.cell(row=r(), column=1, value=metric), alt=alt)
             val_cell(ws.cell(row=r(), column=2, value=value),  alt=alt, right=True)
-            val_cell(ws.cell(row=r(), column=3, value=FORMULAS_REF.get(metric, "")),
-                     alt=alt, italic=True, gray=True)
             ws.row_dimensions[r()].height = 15
             next_row()
 
-        # nota interpretación asimetría
         note = ws.cell(row=r(), column=1,
                        value=f"Nota: Asimetria={stats.get('Asimetria','?')}  "
                              f"({'cola derecha (precios altos)' if stats.get('Asimetria',0)>0 else 'cola izquierda'}). "
                              f"Outliers totales: {stats.get('N Outliers Inferiores',0)+stats.get('N Outliers Superiores',0)}")
-        ws.merge_cells(start_row=r(), start_column=1, end_row=r(), end_column=3)
+        ws.merge_cells(start_row=r(), start_column=1, end_row=r(), end_column=2)
         note.font = Font(size=8, italic=True, color="444444")
         note.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
         ws.row_dimensions[r()].height = 22
@@ -379,7 +361,6 @@ def escribir_estadisticas(writer, df):
         col_color=C_GLOBAL,
         variable="precio_ars",
         series=df["precio_ars"],
-        col_formula_note="F",
     )
 
     # ── Sección 2: precio_por_ml global ──────────────────────────────
@@ -389,7 +370,6 @@ def escribir_estadisticas(writer, df):
         col_color=C_GLOBAL,
         variable="precio_por_ml",
         series=df_ml["precio_por_ml"],
-        col_formula_note="J",
     )
 
     # ── Sección 3: H1 — precio_por_ml por linea_tipo ─────────────────
@@ -454,16 +434,15 @@ def main():
             escribir_limpio(writer, df, nombre_limpio, colores)
             print(f"  {nombre_limpio}: {disponibles} filas disponibles + {len(FORMULAS_LIMPIEZA)} columnas con fórmulas")
 
-        escribir_diccionario(writer)
         escribir_guia_formulas(writer)
 
         df_clean = pd.read_csv(CLEAN_PATH)
         escribir_estadisticas(writer, df_clean)
         print(f"  estadistica_descriptiva: {len(df_clean)} registros analizados")
-        print(f"  diccionario_datos + guia_formulas_limpieza")
+        print(f"  guia_formulas_limpieza")
 
     print(f"\nArchivo generado: {OUTPUT}")
-    print(f"Hojas: raw_Jumbo, limpio_Jumbo, raw_Farmacity, limpio_Farmacity, raw_Disco, limpio_Disco, diccionario_datos, guia_formulas_limpieza")
+    print(f"Hojas: raw_Jumbo, limpio_Jumbo, raw_Farmacity, limpio_Farmacity, raw_Disco, limpio_Disco, guia_formulas_limpieza, estadistica_descriptiva")
 
 
 if __name__ == "__main__":
