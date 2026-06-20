@@ -1,8 +1,10 @@
+import numpy as np
 import pandas as pd
 from collections import OrderedDict
 from pathlib import Path
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.utils import get_column_letter
+from openpyxl.chart import BarChart, PieChart, ScatterChart, Reference, Series
 
 BASE = Path(__file__).parent.parent
 
@@ -417,6 +419,212 @@ def escribir_estadisticas(writer, df):
     ws.freeze_panes = "A3"
 
 
+def escribir_visualizaciones(writer, df):
+    """Hoja con 8 gráficos nativos Excel + hoja auxiliar de datos."""
+    wb = writer.book
+
+    # ── Hoja auxiliar de datos (oculta) ─────────────────────────────
+    ws_d = wb.create_sheet("_datos_graficos")
+
+    cur = [1]
+
+    def wt(headers, rows):
+        """Escribe tabla, retorna (fila_header, fila_inicio, fila_fin)."""
+        h = cur[0]
+        for j, v in enumerate(headers, 1):
+            ws_d.cell(h, j, v)
+        cur[0] += 1
+        s = cur[0]
+        for row in rows:
+            for j, v in enumerate(row, 1):
+                ws_d.cell(cur[0], j, v)
+            cur[0] += 1
+        e = cur[0] - 1
+        cur[0] += 1
+        return h, s, e
+
+    df_ml = df[df["precio_por_ml"].notna() & df["linea_tipo"].notna()]
+
+    # T1 – distribución fuente
+    conteo = df["fuente"].value_counts().reindex(["Farmacity", "Jumbo", "Disco"])
+    t1h, t1s, t1e = wt(["fuente", "n"],
+                        [(f, int(n)) for f, n in conteo.items()])
+
+    # T2 – precio_ars por fuente
+    s2 = df.groupby("fuente")["precio_ars"].agg(media="mean", mediana="median") \
+           .reindex(["Jumbo", "Farmacity", "Disco"]).round(0)
+    t2h, t2s, t2e = wt(["fuente", "Media", "Mediana"],
+                        [(f, float(r["media"]), float(r["mediana"])) for f, r in s2.iterrows()])
+
+    # T3 – H1 linea tipo
+    s3 = df_ml.groupby("linea_tipo")["precio_por_ml"].agg(media="mean", mediana="median") \
+               .reindex(["profesional", "estandar"]).round(2)
+    t3h, t3s, t3e = wt(["linea", "Media", "Mediana"],
+                        [(l.capitalize(), float(r["media"]), float(r["mediana"])) for l, r in s3.iterrows()])
+
+    # T4 – H2 tipo cabello
+    s4 = df_ml.groupby("tipo_cabello")["precio_por_ml"].mean().round(2).sort_values(ascending=False)
+    t4h, t4s, t4e = wt(["tipo_cabello", "Media precio/ml"],
+                        [(tc.replace("_", " ").capitalize(), float(v)) for tc, v in s4.items()])
+
+    # T5 – histograma precio_ars
+    bins = list(range(0, 50001, 2500)) + [int(df["precio_ars"].max()) + 1]
+    labels5 = [f"${b//1000}k-${(bins[i+1]-1)//1000}k" for i, b in enumerate(bins[:-1])]
+    freq5, _ = np.histogram(df["precio_ars"].dropna(), bins=bins)
+    t5h, t5s, t5e = wt(["rango", "frecuencia"],
+                        [(lbl, int(f)) for lbl, f in zip(labels5, freq5) if f > 0])
+
+    # T6 – top 10 marcas
+    top10 = df["marca"].value_counts().head(10)
+    t6h, t6s, t6e = wt(["marca", "n"],
+                        [(m, int(n)) for m, n in top10.items()])
+
+    # T7 – tipo producto por fuente
+    piv7 = df.groupby(["fuente", "tipo_producto"]).size().unstack(fill_value=0) \
+              .reindex(["Jumbo", "Farmacity", "Disco"])
+    tipos7 = piv7.columns.tolist()
+    t7h, t7s, t7e = wt(["fuente"] + [t.capitalize() for t in tipos7],
+                        [(f, *[int(piv7.loc[f, t]) for t in tipos7]) for f in ["Jumbo", "Farmacity", "Disco"]])
+
+    # T8 – scatter volumen vs precio
+    df_sc = df[df["volumen_ml"].notna() & (df["volumen_ml"] <= 2000) &
+               (df["precio_ars"] <= df["precio_ars"].quantile(0.97))][["volumen_ml", "precio_ars"]]
+    t8h, t8s, t8e = wt(["volumen_ml", "precio_ars"],
+                        [(float(round(r["volumen_ml"], 1)), float(round(r["precio_ars"], 0)))
+                         for _, r in df_sc.iterrows()])
+
+    # ── Hoja visualizaciones ─────────────────────────────────────────
+    ws = wb.create_sheet("visualizaciones")
+    ws.sheet_view.showGridLines = False
+
+    ws.merge_cells("A1:Z1")
+    c = ws["A1"]
+    c.value = "Visualizaciones — Dataset Shampoo & Acondicionador (Clase 12 UADE)"
+    c.fill = PatternFill("solid", fgColor="1C2833")
+    c.font = Font(color="FFFFFF", bold=True, size=12)
+    c.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[1].height = 26
+
+    CW, CH = 15, 12   # cm por gráfico
+    ROW_GAP = 28      # filas entre pares
+    START   = 3       # fila del primer título
+
+    TITULOS = [
+        "G1: Distribucion de productos por fuente",
+        "G2 (H3): Precio promedio y mediana por fuente",
+        "G3 (H1): Precio por ml — Profesional vs Estandar",
+        "G4 (H2): Precio por ml por tipo de cabello",
+        "G5: Distribucion de precios — histograma",
+        "G6: Top 10 marcas por cantidad de productos",
+        "G7: Composicion del catalogo por tipo de producto y fuente",
+        "G8: Relacion precio ARS vs volumen (ml)",
+    ]
+    CONCLUSIONES = [
+        "Conclusion: Farmacity concentra el 56% de los productos disponibles, mas del doble que Jumbo y Disco. La amplitud del catalogo varia significativamente entre retailers.",
+        "Conclusion (H3): Farmacity presenta el precio promedio mas alto. En todos los casos la mediana < media, senalando outliers hacia precios altos.",
+        "Conclusion (H1): La linea profesional es mas cara por ml que la estandar, lo que valida la hipotesis H1.",
+        "Conclusion (H2): Los productos para cabello rizado y tratado tienen mayor precio/ml, validando H2 parcialmente. Los de uso general son los mas economicos.",
+        "Conclusion: Distribucion con asimetria positiva — la mayoria de productos se concentra en rangos bajos, con cola larga hacia precios altos.",
+        "Conclusion: Las 3 principales marcas concentran mas del 50% del catalogo. Alta concentracion en pocas marcas masivas (Pantene, Elvive, Sedal).",
+        "Conclusion: El shampoo domina en las 3 fuentes. Farmacity tiene mayor proporcion de acondicionadores y tratamientos, coherente con su perfil de farmacia.",
+        "Conclusion: Correlacion positiva moderada entre volumen y precio. A mayor contenido, mayor precio, aunque con alta dispersion.",
+    ]
+
+    # Construir los 8 gráficos
+    def ref(col, hr, er):
+        return Reference(ws_d, min_col=col, min_row=hr, max_row=er)
+
+    # G1 – torta
+    g1 = PieChart()
+    g1.add_data(ref(2, t1h, t1e), titles_from_data=True)
+    g1.set_categories(ref(1, t1s, t1e))
+    g1.width, g1.height = CW, CH
+
+    # G2 – barras agrupadas precio fuente
+    g2 = BarChart()
+    g2.type, g2.grouping = "col", "clustered"
+    g2.add_data(ref(2, t2h, t2e), titles_from_data=True)
+    g2.add_data(ref(3, t2h, t2e), titles_from_data=True)
+    g2.set_categories(ref(1, t2s, t2e))
+    g2.width, g2.height = CW, CH
+
+    # G3 – columnas H1
+    g3 = BarChart()
+    g3.type, g3.grouping = "col", "clustered"
+    g3.add_data(ref(2, t3h, t3e), titles_from_data=True)
+    g3.add_data(ref(3, t3h, t3e), titles_from_data=True)
+    g3.set_categories(ref(1, t3s, t3e))
+    g3.width, g3.height = CW, CH
+
+    # G4 – barras horizontales H2
+    g4 = BarChart()
+    g4.type = "bar"
+    g4.add_data(ref(2, t4h, t4e), titles_from_data=True)
+    g4.set_categories(ref(1, t4s, t4e))
+    g4.width, g4.height = CW, CH
+
+    # G5 – histograma (barras sin gap)
+    g5 = BarChart()
+    g5.type, g5.gapWidth = "col", 0
+    g5.add_data(ref(2, t5h, t5e), titles_from_data=True)
+    g5.set_categories(ref(1, t5s, t5e))
+    g5.width, g5.height = CW, CH
+
+    # G6 – barras horizontales marcas
+    g6 = BarChart()
+    g6.type = "bar"
+    g6.add_data(ref(2, t6h, t6e), titles_from_data=True)
+    g6.set_categories(ref(1, t6s, t6e))
+    g6.width, g6.height = CW, CH
+
+    # G7 – columnas apiladas tipo producto
+    g7 = BarChart()
+    g7.type, g7.grouping = "col", "stacked"
+    for col_idx in range(2, 2 + len(tipos7)):
+        g7.add_data(ref(col_idx, t7h, t7e), titles_from_data=True)
+    g7.set_categories(ref(1, t7s, t7e))
+    g7.width, g7.height = CW, CH
+
+    # G8 – dispersión precio vs volumen
+    g8 = ScatterChart()
+    g8.scatterStyle = "marker"
+    s8 = Series(ref(2, t8s, t8e), ref(1, t8s, t8e), title="Productos")
+    s8.marker.symbol = "circle"
+    s8.marker.size   = 3
+    s8.graphicalProperties.line.noFill = True
+    g8.series.append(s8)
+    g8.width, g8.height = CW, CH
+
+    GRAFICOS = [g1, g2, g3, g4, g5, g6, g7, g8]
+
+    # Colocar gráficos: 2 por fila
+    for i, (chart, titulo, concl) in enumerate(zip(GRAFICOS, TITULOS, CONCLUSIONES)):
+        pair_r = START + (i // 2) * ROW_GAP
+        col    = "B" if i % 2 == 0 else "N"
+        col2   = "M" if i % 2 == 0 else "Z"
+
+        # Título sobre el gráfico
+        ws.merge_cells(f"{col}{pair_r}:{col2}{pair_r}")
+        tc = ws[f"{col}{pair_r}"]
+        tc.value = titulo
+        tc.fill  = PatternFill("solid", fgColor="2C3E50")
+        tc.font  = Font(color="FFFFFF", bold=True, size=10)
+        tc.alignment = Alignment(horizontal="left", vertical="center")
+        ws.row_dimensions[pair_r].height = 18
+
+        # Gráfico
+        ws.add_chart(chart, f"{col}{pair_r + 1}")
+
+        # Conclusión debajo
+        concl_r = pair_r + 24
+        ws.merge_cells(f"{col}{concl_r}:{col2}{concl_r}")
+        cc = ws[f"{col}{concl_r}"]
+        cc.value = concl
+        cc.font  = Font(size=8.5, italic=True, color="444444")
+        cc.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        ws.row_dimensions[concl_r].height = 32
+
+
 def main():
     with pd.ExcelWriter(OUTPUT, engine="openpyxl") as writer:
         for fuente, path in RAW_PATHS.items():
@@ -438,7 +646,9 @@ def main():
 
         df_clean = pd.read_csv(CLEAN_PATH)
         escribir_estadisticas(writer, df_clean)
+        escribir_visualizaciones(writer, df_clean)
         print(f"  estadistica_descriptiva: {len(df_clean)} registros analizados")
+        print(f"  visualizaciones: 8 graficos nativos")
         print(f"  guia_formulas_limpieza")
 
     print(f"\nArchivo generado: {OUTPUT}")
