@@ -1,113 +1,219 @@
 import pandas as pd
 from pathlib import Path
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.utils import get_column_letter
 
 BASE = Path(__file__).parent.parent
 
-RAW = {
-    "raw_Jumbo":     BASE / "data" / "raw" / "jumbo_raw.csv",
-    "raw_Farmacity": BASE / "data" / "raw" / "farmacity_raw.csv",
-    "raw_Disco":     BASE / "data" / "raw" / "disco_raw.csv",
+RAW_PATHS = {
+    "Jumbo":     BASE / "data" / "raw" / "jumbo_raw.csv",
+    "Farmacity": BASE / "data" / "raw" / "farmacity_raw.csv",
+    "Disco":     BASE / "data" / "raw" / "disco_raw.csv",
 }
 
-CLEAN_PATH = BASE / "data" / "clean" / "dataset_limpio.csv"
-OUTPUT     = BASE / "data" / "planilla_shampoo.xlsx"
+OUTPUT = BASE / "data" / "planilla_shampoo.xlsx"
 
+# Colores por fuente
+COLORES = {
+    "Jumbo":     {"header": "1A5276", "alt": "D6EAF8", "formula_h": "1F618D", "formula_alt": "AED6F1"},
+    "Farmacity": {"header": "1E8449", "alt": "D5F5E3", "formula_h": "196F3D", "formula_alt": "A9DFBF"},
+    "Disco":     {"header": "7D6608", "alt": "FEF9E7", "formula_h": "9A7D0A", "formula_alt": "F9E79F"},
+}
+
+# Diccionario de datos
 DICCIONARIO = [
-    ("fuente",         "Texto",   "Origen del dato: Jumbo, Farmacity o Disco"),
-    ("producto_id",    "Entero",  "ID interno del producto en el sistema VTEX del retailer"),
-    ("sku_id",         "Entero",  "ID interno del SKU (variante específica del producto)"),
-    ("nombre",         "Texto",   "Nombre completo del producto tal como aparece en el sitio"),
-    ("marca",          "Texto",   "Marca del producto, normalizada a Title Case"),
-    ("precio_ars",     "Decimal", "Precio de venta en pesos argentinos (ARS)"),
-    ("precio_lista",   "Decimal", "Precio de lista original antes de descuentos (ARS)"),
-    ("disponible",     "Booleano","True = disponible para compra; False = sin stock / discontinuado"),
-    ("volumen_ml",     "Decimal", "Volumen del producto en mililitros, extraído del nombre con regex"),
-    ("precio_por_ml",  "Decimal", "Precio por mililitro = precio_ars / volumen_ml"),
-    ("categoria_raw",  "Texto",   "Categoría jerárquica del producto según el árbol del retailer"),
-    ("tipo_producto",  "Texto",   "Clasificación: shampoo / acondicionador / tratamiento"),
-    ("linea_tipo",     "Texto",   "Clasificación: profesional / estandar (por keywords en nombre/marca)"),
-    ("tipo_cabello",   "Texto",   "Tipo de cabello objetivo: general / rizado / tratado / anticaspa / seco_danado / bebe / graso"),
-    ("es_combo",       "Booleano","True si el producto es un pack o kit de varios artículos"),
-    ("url",            "Texto",   "URL del producto en el sitio del retailer"),
+    ("fuente",         "Texto",    "PK parcial", "Origen del dato: Jumbo, Farmacity o Disco"),
+    ("producto_id",    "Entero",   "FK",         "ID interno del producto en el sistema VTEX del retailer"),
+    ("sku_id",         "Entero",   "PK",         "ID del SKU (variante única del producto) — clave primaria"),
+    ("nombre",         "Texto",    "-",          "Nombre completo del producto tal como aparece en el sitio"),
+    ("marca",          "Texto",    "-",          "Marca del producto (puede tener inconsistencias de case en raw)"),
+    ("precio_ars",     "Decimal",  "-",          "Precio de venta en pesos argentinos (ARS)"),
+    ("precio_lista",   "Decimal",  "-",          "Precio de lista original antes de descuentos (ARS)"),
+    ("disponible",     "Booleano", "-",          "TRUE = disponible para compra al momento del scraping"),
+    ("volumen_ml",     "Decimal",  "-",          "Volumen en ml extraído del nombre con regex. NULL si no se encontró"),
+    ("precio_por_ml",  "Decimal",  "-",          "precio_ars / volumen_ml. NULL si no hay volumen"),
+    ("categoria_raw",  "Texto",    "-",          "Categoría jerárquica según el árbol del retailer"),
+    ("tipo_producto",  "Texto",    "-",          "Clasificado por Python: shampoo / acondicionador / tratamiento"),
+    ("linea_tipo",     "Texto",    "-",          "Clasificado por Python: profesional / estandar"),
+    ("tipo_cabello",   "Texto",    "-",          "Clasificado por Python: general / rizado / tratado / anticaspa / seco_danado / bebe / graso"),
+    ("url",            "Texto",    "-",          "URL del producto en el sitio del retailer"),
 ]
 
-HEADER_FILL  = PatternFill("solid", fgColor="1F3864")
-HEADER_FONT  = Font(color="FFFFFF", bold=True, size=10)
-ALT_FILL     = PatternFill("solid", fgColor="EEF2F8")
-BORDER_SIDE  = Side(style="thin", color="CCCCCC")
-CELL_BORDER  = Border(bottom=Border(bottom=BORDER_SIDE).bottom)
+# Columnas de fórmulas Excel a agregar en hojas limpias
+# Cada entrada: (header, formula_template)
+# {row} se reemplaza por el número de fila real
+# Las letras de columna corresponden al raw (A=fuente...O=url)
+FORMULAS_LIMPIEZA = [
+    (
+        "nombre_limpio",
+        "=ESPACIOS(LIMPIAR(NOMPROPIO(D{row})))",
+        "ESPACIOS+LIMPIAR+NOMPROPIO sobre 'nombre': elimina espacios, caracteres no imprimibles y capitaliza"
+    ),
+    (
+        "marca_normalizada",
+        "=NOMPROPIO(ESPACIOS(SUSTITUIR(SUSTITUIR(SUSTITUIR(SUSTITUIR(E{row},\"TRESEMME\",\"Tresemmé\"),\"HEAD & SHOULDERS\",\"Head & Shoulders\"),\"ELVIVE\",\"Elvive\"),\"FRUCTIS\",\"Fructis\")))",
+        "NOMPROPIO+ESPACIOS+SUSTITUIR sobre 'marca': normaliza case y corrige nombres específicos"
+    ),
+    (
+        "es_duplicado",
+        "=CONTAR.SI($D$2:$D$10000,D{row})>1",
+        "CONTAR.SI sobre 'nombre': detecta si hay más de 1 fila con el mismo nombre (posible duplicado)"
+    ),
+    (
+        "disponible_texto",
+        "=SI(H{row}=VERDADERO,\"Disponible\",\"No disponible\")",
+        "SI sobre 'disponible': convierte booleano a texto legible"
+    ),
+    (
+        "precio_ml_calculado",
+        "=SI(Y(ISNUMBER(I{row}),I{row}>0),REDONDEAR(F{row}/I{row},2),\"Sin volumen\")",
+        "SI+Y+ISNUMBER+REDONDEAR: calcula precio/ml solo cuando el volumen es un número válido"
+    ),
+    (
+        "rango_precio",
+        "=SI(F{row}<5000,\"Bajo\",SI(F{row}<15000,\"Medio\",\"Alto\"))",
+        "SI anidado sobre 'precio_ars': segmenta en rangos Bajo/Medio/Alto"
+    ),
+]
 
-SECTION_COLORS = {
-    "Jumbo":     "D6EAF8",
-    "Farmacity": "D5F5E3",
-    "Disco":     "FEF9E7",
-}
+
+def set_header_style(cell, hex_color):
+    cell.fill = PatternFill("solid", fgColor=hex_color)
+    cell.font = Font(color="FFFFFF", bold=True, size=10)
+    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
 
-def estilo_header(ws):
-    for cell in ws[1]:
-        cell.fill   = HEADER_FILL
-        cell.font   = HEADER_FONT
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    ws.row_dimensions[1].height = 28
-
-
-def autofit(ws, max_width=50):
+def autofit(ws, max_w=55):
     for col in ws.columns:
         col_letter = get_column_letter(col[0].column)
         max_len = max((len(str(c.value)) if c.value else 0) for c in col)
-        ws.column_dimensions[col_letter].width = min(max_len + 3, max_width)
+        ws.column_dimensions[col_letter].width = min(max_len + 3, max_w)
 
 
-def filas_alternas(ws, fill_color, start_row=2):
-    fill = PatternFill("solid", fgColor=fill_color)
-    for i, row in enumerate(ws.iter_rows(min_row=start_row, max_row=ws.max_row)):
+def escribir_raw(writer, df, nombre_hoja, colores):
+    df.to_excel(writer, sheet_name=nombre_hoja, index=False)
+    ws = writer.sheets[nombre_hoja]
+
+    # Header
+    for cell in ws[1]:
+        set_header_style(cell, colores["header"])
+    ws.row_dimensions[1].height = 26
+
+    # Filas alternas
+    fill = PatternFill("solid", fgColor=colores["alt"])
+    for i, row in enumerate(ws.iter_rows(min_row=2, max_row=ws.max_row)):
         if i % 2 == 0:
             for cell in row:
                 cell.fill = fill
 
+    ws.freeze_panes = "A2"
+    autofit(ws)
 
-def escribir_hoja(writer, df, nombre_hoja, fill_color):
+
+def escribir_limpio(writer, df_raw, nombre_hoja, colores):
+    """
+    Hoja de limpieza: raw data (solo disponibles) + columnas con fórmulas Excel.
+    Metodología de clase: dejar original intacto y trabajar en hoja paralela.
+    """
+    # Solo disponibles (equivale a aplicar Filtro en Excel por disponible=TRUE)
+    df = df_raw[df_raw["disponible"] == True].copy().reset_index(drop=True)
+
     df.to_excel(writer, sheet_name=nombre_hoja, index=False)
     ws = writer.sheets[nombre_hoja]
-    estilo_header(ws)
-    filas_alternas(ws, fill_color)
-    autofit(ws)
+
+    n_cols_raw = len(df.columns)  # columnas del raw (hasta col O = 15)
+
+    # ── Headers raw ──────────────────────────────────────────────────
+    for cell in ws[1]:
+        set_header_style(cell, colores["header"])
+
+    # ── Headers de fórmulas (columnas extras) ────────────────────────
+    formula_fill_h = PatternFill("solid", fgColor=colores["formula_h"])
+    for i, (header, _, _) in enumerate(FORMULAS_LIMPIEZA):
+        col_idx = n_cols_raw + 1 + i          # 1-based
+        col_letter = get_column_letter(col_idx)
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        set_header_style(cell, colores["formula_h"])
+
+    ws.row_dimensions[1].height = 26
+
+    # ── Filas de datos con fórmulas ──────────────────────────────────
+    alt_fill     = PatternFill("solid", fgColor=colores["alt"])
+    formula_fill = PatternFill("solid", fgColor=colores["formula_alt"])
+
+    for i, row_obj in enumerate(ws.iter_rows(min_row=2, max_row=ws.max_row)):
+        row_num = i + 2
+        # Color alterno en columnas raw
+        if i % 2 == 0:
+            for cell in row_obj:
+                cell.fill = alt_fill
+
+        # Insertar fórmulas en columnas extras
+        for j, (_, formula_tpl, _) in enumerate(FORMULAS_LIMPIEZA):
+            col_idx = n_cols_raw + 1 + j
+            formula = formula_tpl.replace("{row}", str(row_num))
+            cell = ws.cell(row=row_num, column=col_idx, value=formula)
+            if i % 2 == 0:
+                cell.fill = formula_fill
+
     ws.freeze_panes = "A2"
+    autofit(ws)
+
+
+def escribir_diccionario(writer, colores_base="1F3864"):
+    rows = []
+    for campo, tipo, clave, desc in DICCIONARIO:
+        rows.append({"Campo": campo, "Tipo de dato": tipo, "Clave": clave, "Descripción": desc})
+    df = pd.DataFrame(rows)
+    df.to_excel(writer, sheet_name="diccionario_datos", index=False)
+    ws = writer.sheets["diccionario_datos"]
+    for cell in ws[1]:
+        set_header_style(cell, colores_base)
+    ws.row_dimensions[1].height = 26
+    autofit(ws, max_w=80)
+    ws.column_dimensions["D"].width = 72
+
+
+def escribir_guia_formulas(writer):
+    """Hoja extra: guía de qué fórmula hace qué (útil para el informe)."""
+    rows = []
+    for header, formula_tpl, desc in FORMULAS_LIMPIEZA:
+        ejemplo = formula_tpl.replace("{row}", "2")
+        rows.append({"Columna generada": header, "Fórmula (fila 2)": ejemplo, "Qué hace": desc})
+    df = pd.DataFrame(rows)
+    df.to_excel(writer, sheet_name="guia_formulas_limpieza", index=False)
+    ws = writer.sheets["guia_formulas_limpieza"]
+    for cell in ws[1]:
+        set_header_style(cell, "6C3483")
+    ws.row_dimensions[1].height = 26
+    autofit(ws, max_w=90)
+    ws.column_dimensions["B"].width = 75
+    ws.column_dimensions["C"].width = 75
 
 
 def main():
-    df_clean = pd.read_csv(CLEAN_PATH, index_col="id")
-
     with pd.ExcelWriter(OUTPUT, engine="openpyxl") as writer:
-
-        # --- Hojas raw ---
-        for hoja, path in RAW.items():
-            fuente = hoja.split("_")[1]
+        for fuente, path in RAW_PATHS.items():
             df = pd.read_csv(path)
-            color = SECTION_COLORS.get(fuente, "F5F5F5")
-            escribir_hoja(writer, df, hoja, color)
-            print(f"  {hoja}: {len(df)} filas")
+            colores = COLORES[fuente]
 
-        # --- Hojas limpias por fuente ---
-        for fuente in ["Jumbo", "Farmacity", "Disco"]:
-            df_f = df_clean[df_clean["fuente"] == fuente].copy()
-            color = SECTION_COLORS.get(fuente, "F5F5F5")
-            escribir_hoja(writer, df_f.reset_index(drop=True), f"limpio_{fuente}", color)
-            print(f"  limpio_{fuente}: {len(df_f)} filas")
+            # Hoja raw
+            nombre_raw = f"raw_{fuente}"
+            escribir_raw(writer, df, nombre_raw, colores)
+            print(f"  {nombre_raw}: {len(df)} filas")
 
-        # --- Diccionario de datos ---
-        df_dic = pd.DataFrame(DICCIONARIO, columns=["Campo", "Tipo", "Descripción"])
-        df_dic.to_excel(writer, sheet_name="diccionario_datos", index=False)
-        ws = writer.sheets["diccionario_datos"]
-        estilo_header(ws)
-        autofit(ws, max_width=80)
-        ws.column_dimensions["C"].width = 70
-        print(f"  diccionario_datos: {len(df_dic)} campos")
+            # Hoja limpieza con fórmulas
+            nombre_limpio = f"limpio_{fuente}"
+            disponibles = df["disponible"].sum()
+            escribir_limpio(writer, df, nombre_limpio, colores)
+            print(f"  {nombre_limpio}: {disponibles} filas disponibles + {len(FORMULAS_LIMPIEZA)} columnas con fórmulas")
+
+        escribir_diccionario(writer)
+        escribir_guia_formulas(writer)
+        print(f"  diccionario_datos + guia_formulas_limpieza")
 
     print(f"\nArchivo generado: {OUTPUT}")
+    print(f"Hojas: raw_Jumbo, limpio_Jumbo, raw_Farmacity, limpio_Farmacity, raw_Disco, limpio_Disco, diccionario_datos, guia_formulas_limpieza")
 
 
 if __name__ == "__main__":
