@@ -5,6 +5,7 @@ from pathlib import Path
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.chart import BarChart, PieChart, ScatterChart, Reference, Series
+from openpyxl.chart.trendline import Trendline
 
 BASE = Path(__file__).parent.parent
 
@@ -625,6 +626,229 @@ def escribir_visualizaciones(writer, df):
         ws.row_dimensions[concl_r].height = 32
 
 
+def escribir_regresion(writer, df):
+    """
+    Hoja de regresión lineal simple: volumen_ml → precio_ars.
+    - Cols A-B: datos crudos filtrados (alimentan las fórmulas Sheets).
+    - Cols D-F: análisis con fórmulas reales de Sheets (CORREL, SLOPE, INTERCEPT, RSQ, FORECAST).
+    - Tabla de predicción y conclusiones/recomendaciones finales.
+    - Scatter chart con línea de tendencia lineal.
+    """
+    # ── Datos filtrados para la regresión ────────────────────────────
+    df_r = df[
+        df["volumen_ml"].notna() &
+        (df["volumen_ml"] <= 2000) &
+        (df["precio_ars"] <= df["precio_ars"].quantile(0.97))
+    ][["volumen_ml", "precio_ars"]].copy().reset_index(drop=True)
+
+    n = len(df_r)
+
+    # Valores pre-calculados por Python (para las conclusiones escritas)
+    r_val   = float(df_r["volumen_ml"].corr(df_r["precio_ars"]))
+    slope   = float(np.polyfit(df_r["volumen_ml"], df_r["precio_ars"], 1)[0])
+    intcpt  = float(np.polyfit(df_r["volumen_ml"], df_r["precio_ars"], 1)[1])
+    r2_val  = r_val ** 2
+
+    if abs(r_val) >= 0.7:
+        r_str = "fuerte"
+    elif abs(r_val) >= 0.4:
+        r_str = "moderada"
+    else:
+        r_str = "debil"
+    r_dir = "positiva" if r_val > 0 else "negativa"
+
+    wb = writer.book
+    ws = wb.create_sheet("regresion_lineal")
+    ws.sheet_view.showGridLines = False
+
+    # ── Helpers de estilo ────────────────────────────────────────────
+    def title_cell(row, col, text, bg="1C2833", span_to=None):
+        ws.cell(row, col, text)
+        if span_to:
+            ws.merge_cells(start_row=row, start_column=col,
+                           end_row=row, end_column=span_to)
+        c = ws.cell(row, col)
+        c.fill = PatternFill("solid", fgColor=bg)
+        c.font = Font(color="FFFFFF", bold=True, size=10)
+        c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        ws.row_dimensions[row].height = 20
+
+    def label(row, col, text, bold=False):
+        c = ws.cell(row, col, text)
+        c.font = Font(bold=bold, size=9.5)
+        c.alignment = Alignment(vertical="center")
+
+    def formula_cell(row, col, formula_str, right=False, bold=False, bg=None):
+        c = ws.cell(row, col, formula_str)
+        c.font = Font(size=9.5, bold=bold)
+        c.alignment = Alignment(horizontal="right" if right else "left", vertical="center")
+        if bg:
+            c.fill = PatternFill("solid", fgColor=bg)
+
+    def note_cell(row, col, text, span_to=None, italic=False, bg=None):
+        c = ws.cell(row, col, text)
+        if span_to:
+            ws.merge_cells(start_row=row, start_column=col,
+                           end_row=row, end_column=span_to)
+        c = ws.cell(row, col)
+        c.font = Font(size=9, italic=italic, color="444444")
+        c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        if bg:
+            c.fill = PatternFill("solid", fgColor=bg)
+        ws.row_dimensions[row].height = 28
+
+    # ── Anchos de columna ────────────────────────────────────────────
+    ws.column_dimensions["A"].width = 14
+    ws.column_dimensions["B"].width = 14
+    ws.column_dimensions["C"].width = 3
+    ws.column_dimensions["D"].width = 30
+    ws.column_dimensions["E"].width = 26
+    ws.column_dimensions["F"].width = 3
+    ws.column_dimensions["G"].width = 20
+    ws.column_dimensions["H"].width = 14
+
+    # ── TÍTULO PRINCIPAL ─────────────────────────────────────────────
+    ws.merge_cells("A1:H1")
+    c = ws["A1"]
+    c.value = "Regresion Lineal Simple — volumen_ml → precio_ars  (Clase 5 UADE)"
+    c.fill  = PatternFill("solid", fgColor="1C2833")
+    c.font  = Font(color="FFFFFF", bold=True, size=12)
+    c.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[1].height = 26
+
+    # ── DATOS CRUDOS (cols A-B, fila 3 en adelante) ──────────────────
+    title_cell(3, 1, "Datos para el modelo (n=" + str(n) + " productos con volumen <= 2000ml)", span_to=2)
+    ws.cell(4, 1, "volumen_ml").font = Font(bold=True, size=9)
+    ws.cell(4, 2, "precio_ars").font = Font(bold=True, size=9)
+    ws.row_dimensions[4].height = 16
+
+    DATA_START = 5
+    for i, (_, row_data) in enumerate(df_r.iterrows()):
+        ws.cell(DATA_START + i, 1, round(float(row_data["volumen_ml"]), 1))
+        ws.cell(DATA_START + i, 2, round(float(row_data["precio_ars"]), 0))
+    DATA_END = DATA_START + n - 1
+
+    # Rangos de referencia para las fórmulas
+    X = f"$A${DATA_START}:$A${DATA_END}"
+    Y = f"$B${DATA_START}:$B${DATA_END}"
+
+    # ── ANÁLISIS (col D-E) ───────────────────────────────────────────
+    R = 3   # fila de inicio del bloque análisis
+
+    title_cell(R,     4, "Variables del modelo", bg="1A5276", span_to=5)
+    label(R+1, 4, "Variable explicativa (X)");  label(R+1, 5, "volumen_ml  (ml)")
+    label(R+2, 4, "Variable explicada (Y)");    label(R+2, 5, "precio_ars  (ARS)")
+    label(R+3, 4, "n observaciones");           formula_cell(R+3, 5, f"=COUNTA({X})", right=True)
+    ws.row_dimensions[R+1].height = 16
+    ws.row_dimensions[R+2].height = 16
+    ws.row_dimensions[R+3].height = 16
+
+    R2 = R + 6
+    title_cell(R2,   4, "Correlacion y bondad del ajuste", bg="6C3483", span_to=5)
+    label(R2+1, 4, "Correlacion (r)");           formula_cell(R2+1, 5, f"=CORREL({X},{Y})", right=True, bold=True)
+    label(R2+2, 4, "Interpretacion");            label(R2+2, 5, f"Correlacion {r_str} {r_dir} (r={r_val:.3f})")
+    label(R2+3, 4, "R2 (coef. determinacion)");  formula_cell(R2+3, 5, f"=RSQ({Y},{X})", right=True, bold=True)
+    label(R2+4, 4, "Interpretacion R2");         label(R2+4, 5, f"El volumen explica el {r2_val*100:.1f}% de la variacion del precio")
+    for rr in range(R2+1, R2+5):
+        ws.row_dimensions[rr].height = 18
+
+    R3 = R2 + 7
+    title_cell(R3,   4, "Ecuacion de la recta   Y = a + b*X", bg="117A65", span_to=5)
+    label(R3+1, 4, "Pendiente (b) = SLOPE");     formula_cell(R3+1, 5, f"=SLOPE({Y},{X})", right=True, bold=True)
+    label(R3+2, 4, "Intercepto (a) = INTERCEPT");formula_cell(R3+2, 5, f"=INTERCEPT({Y},{X})", right=True, bold=True)
+    label(R3+3, 4, "Ecuacion resultante");        label(R3+3, 5, f"precio = {intcpt:,.0f} + {slope:.1f} × volumen_ml")
+    label(R3+4, 4, "Lectura");                    label(R3+4, 5, f"Por cada 1 ml adicional, el precio sube ~${slope:.1f} ARS")
+    for rr in range(R3+1, R3+5):
+        ws.row_dimensions[rr].height = 18
+
+    R4 = R3 + 7
+    title_cell(R4, 4, "Tabla de prediccion — FORECAST(volumen, Y, X)", bg="784212", span_to=5)
+    label(R4+1, 4, "Volumen (ml)",  bold=True)
+    label(R4+1, 5, "Precio esperado (ARS)",  bold=True)
+    ws.row_dimensions[R4+1].height = 16
+
+    VOL_PRED = [100, 200, 250, 350, 400, 500, 750, 1000, 1500]
+    for k, vol in enumerate(VOL_PRED):
+        r_pred = R4 + 2 + k
+        ws.cell(r_pred, 4, vol)
+        formula_cell(r_pred, 5, f"=FORECAST(D{r_pred},{Y},{X})", right=True)
+        ws.row_dimensions[r_pred].height = 15
+
+    # ── CONCLUSIONES Y RECOMENDACIONES ───────────────────────────────
+    R5 = R4 + 2 + len(VOL_PRED) + 2
+    title_cell(R5, 4, "Conclusiones y Recomendaciones del proyecto", bg="1C2833", span_to=8)
+    ws.row_dimensions[R5].height = 22
+
+    CONCLUSIONES = [
+        ("CONCLUSION H1 — Precio/ml por linea:",
+         f"La linea profesional tiene un precio/ml promedio significativamente mayor que la estandar. "
+         f"Se recomienda a los consumidores evaluar si el diferencial de precio justifica los beneficios "
+         f"del producto profesional, especialmente en shampoos de marca masiva con precio premium."),
+
+        ("CONCLUSION H2 — Precio/ml por tipo de cabello:",
+         f"Los productos para cabello rizado y tratado/tenido presentan mayor precio por ml que los de "
+         f"uso general. Esto refleja la segmentacion del mercado capilar: la especializacion tiene un "
+         f"sobreprecio real. El cabello bebe es el segmento mas economico por ml."),
+
+        ("CONCLUSION H3 — Dispersion de precios por fuente:",
+         f"Farmacity presenta los precios promedio mas altos entre los tres retailers, coherente con su "
+         f"perfil de farmacia especializada. Jumbo y Disco ofrecen precios mas competitivos. "
+         f"Para un mismo producto, conviene comparar entre Jumbo/Disco antes de comprar en Farmacity."),
+
+        ("CONCLUSION REGRESION — volumen_ml → precio_ars:",
+         f"Correlacion {r_str} {r_dir} (r = {r_val:.3f}, R2 = {r2_val:.3f}). "
+         f"El volumen explica el {r2_val*100:.1f}% de la variacion del precio. "
+         f"Ecuacion: precio = {intcpt:,.0f} + {slope:.1f} × volumen_ml. "
+         f"Esto permite detectar oportunidades: productos con precio real muy por encima de la "
+         f"prediccion pueden estar sobrevaluados respecto a su contenido."),
+
+        ("RECOMENDACION para compradores:",
+         f"Usar la ecuacion de regresion como precio de referencia justo segun el volumen. "
+         f"Un shampoo de 400ml deberia costar ~${intcpt + slope*400:,.0f} ARS segun el modelo. "
+         f"Si el precio real supera ese valor significativamente, evaluar alternativas."),
+
+        ("RECOMENDACION para retailers:",
+         f"Los productos con precio/ml mas alto son los de linea profesional y cabello rizado/tratado. "
+         f"Ampliar el catalogo de estas categorias en Jumbo y Disco (actualmente subrepresentadas "
+         f"respecto a Farmacity) podria capturar demanda insatisfecha con mejores margenes."),
+    ]
+
+    for k, (titulo, texto) in enumerate(CONCLUSIONES):
+        r_c = R5 + 1 + k * 3
+        # Subtitulo
+        ws.merge_cells(start_row=r_c, start_column=4, end_row=r_c, end_column=8)
+        ct = ws.cell(r_c, 4, titulo)
+        ct.font = Font(bold=True, size=9.5, color="1C2833")
+        ct.alignment = Alignment(horizontal="left", vertical="center")
+        ws.row_dimensions[r_c].height = 18
+        # Cuerpo
+        ws.merge_cells(start_row=r_c+1, start_column=4, end_row=r_c+1, end_column=8)
+        cb = ws.cell(r_c+1, 4, texto)
+        cb.font = Font(size=9, color="333333")
+        cb.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        ws.row_dimensions[r_c+1].height = 44
+
+    # ── SCATTER CHART con línea de tendencia ─────────────────────────
+    scatter = ScatterChart()
+    scatter.title  = "Precio ARS vs Volumen ml — con linea de tendencia lineal"
+    scatter.x_axis.title = "Volumen (ml)"
+    scatter.y_axis.title = "Precio ARS"
+    scatter.scatterStyle = "marker"
+    scatter.width  = 18
+    scatter.height = 14
+
+    x_ref = Reference(ws, min_col=1, min_row=DATA_START, max_row=DATA_END)
+    y_ref = Reference(ws, min_col=2, min_row=DATA_START, max_row=DATA_END)
+    serie = Series(y_ref, x_ref, title="Productos")
+    serie.marker.symbol = "circle"
+    serie.marker.size   = 3
+    serie.graphicalProperties.line.noFill = True
+    serie.trendline = Trendline(trendlineType="linear", dispEq=True, dispRSqr=True)
+    scatter.series.append(serie)
+
+    ws.add_chart(scatter, "G3")
+
+
 def main():
     with pd.ExcelWriter(OUTPUT, engine="openpyxl") as writer:
         for fuente, path in RAW_PATHS.items():
@@ -647,8 +871,10 @@ def main():
         df_clean = pd.read_csv(CLEAN_PATH)
         escribir_estadisticas(writer, df_clean)
         escribir_visualizaciones(writer, df_clean)
+        escribir_regresion(writer, df_clean)
         print(f"  estadistica_descriptiva: {len(df_clean)} registros analizados")
         print(f"  visualizaciones: 8 graficos nativos")
+        print(f"  regresion_lineal: scatter + formulas Sheets + conclusiones")
         print(f"  guia_formulas_limpieza")
 
     print(f"\nArchivo generado: {OUTPUT}")
